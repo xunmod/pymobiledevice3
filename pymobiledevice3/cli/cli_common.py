@@ -17,6 +17,7 @@ from inquirer3.themes import GreenPassion
 from pygments import formatters, highlight, lexers
 
 from pymobiledevice3.exceptions import AccessDeniedError, DeviceNotFoundError, NoDeviceConnectedError
+from pymobiledevice3.go_ios_api import GO_IOS_AGENT_DEFAULT_ADDRESS, async_get_go_ios_devices
 from pymobiledevice3.lockdown import LockdownClient, create_using_usbmux
 from pymobiledevice3.osu.os_utils import get_os_utils
 from pymobiledevice3.remote.remote_service_discovery import RemoteServiceDiscoveryService
@@ -149,12 +150,16 @@ def choose_service_provider(callback: Callable):
         lockdown_service_provider = kwargs.pop('lockdown_service_provider', None)
         rsd_service_provider_manually = kwargs.pop('rsd_service_provider_manually', None)
         rsd_service_provider_using_tunneld = kwargs.pop('rsd_service_provider_using_tunneld', None)
+        rsd_service_provider_using_go_ios = kwargs.pop('rsd_service_provider_using_go_ios', None)
+        del kwargs['rsd_use_userspace_wrapper']
         if lockdown_service_provider is not None:
             service_provider = lockdown_service_provider
         if rsd_service_provider_manually is not None:
             service_provider = rsd_service_provider_manually
         if rsd_service_provider_using_tunneld is not None:
             service_provider = rsd_service_provider_using_tunneld
+        if rsd_service_provider_using_go_ios is not None:
+            service_provider = rsd_service_provider_using_go_ios
         callback(service_provider=service_provider, **kwargs)
 
     return wrap_callback_calling
@@ -227,23 +232,56 @@ class LockdownCommand(BaseServiceProviderCommand):
 class RSDCommand(BaseServiceProviderCommand):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.userspace_address = None
         self.params[:0] = [
+            RSDOption(('rsd_use_userspace_wrapper', '--userspace-wrapper'), type=(str, int),
+                      callback=self.userspace,
+                      mutually_exclusive=[
+                          'rsd_service_provider_using_tunneld',
+                          'rsd_service_provider_using_go_ios'
+                      ],
+                      help='\b\nhostname and port number of go-ios\'s tunnel userspace wrapper'
+                           '(as provided by `go-ios tunnel ls`).'),
             RSDOption(('rsd_service_provider_manually', '--rsd'), type=(str, int), callback=self.rsd,
-                      mutually_exclusive=['rsd_service_provider_using_tunneld'],
+                      mutually_exclusive=[
+                          'rsd_service_provider_using_tunneld',
+                          'rsd_service_provider_using_go_ios'
+                        ],
                       help='\b\n'
                            'RSD hostname and port number (as provided by a `start-tunnel` subcommand).'),
             RSDOption(('rsd_service_provider_using_tunneld', '--tunnel'), callback=self.tunneld,
-                      mutually_exclusive=['rsd_service_provider_manually'], envvar=TUNNEL_ENV_VAR,
+                      mutually_exclusive=[
+                          'go_ios_userspace_wrapper'
+                          'rsd_service_provider_manually',
+                          'rsd_service_provider_using_go_ios',
+
+                      ],
+                      envvar=TUNNEL_ENV_VAR,
                       help='\b\n'
                            'Either an empty string to force tunneld device selection, or a UDID of a tunneld '
                            'discovered device.\n'
                            'The string may be suffixed with :PORT in case tunneld is not serving at the default port.\n'
-                           f'This option may also be transferred as an environment variable: {TUNNEL_ENV_VAR}')
+                           f'This option may also be transferred as an environment variable: {TUNNEL_ENV_VAR}'),
+            RSDOption(('rsd_service_provider_using_go_ios', '--go-ios'), callback=self.go_ios,
+                      mutually_exclusive=[
+                          'go_ios_userspace_wrapper'
+                          'rsd_service_provider_manually',
+                          'rsd_service_provider_using_tunneld',
+                      ],
+                      help='\b\n'
+                           'Either an empty string to force device selection, or a UDID of a discovered device.\n'
+                           'The string may be suffixed with @HOSTNAME in case go-ios tunnel agent is not serving '
+                           'at the default port.\n'
+                           'Hostname and port of go-ios agent can be set by environment variable '
+                           'GO_IOS_AGENT_HOST and GO_IOS_AGENT_PORT.\n')
         ]
+
+    def userspace(self, ctx, param: str, value: Optional[tuple[str, int]]) -> None:
+        self.userspace_address = value
 
     def rsd(self, ctx, param: str, value: Optional[tuple[str, int]]) -> Optional[RemoteServiceDiscoveryService]:
         if value is not None:
-            rsd = RemoteServiceDiscoveryService(value)
+            rsd = RemoteServiceDiscoveryService(value, userspace_address=self.userspace_address)
             asyncio.run(rsd.connect(), debug=True)
             self.service_provider = rsd
             return self.service_provider
@@ -280,8 +318,50 @@ class RSDCommand(BaseServiceProviderCommand):
 
         return self.service_provider
 
+    async def _go_ios(self, udid: Optional[str] = None) -> Optional[RemoteServiceDiscoveryService]:
+        if udid is None:
+            return
+
+        hostname = os.getenv("GO_IOS_AGENT_HOST", GO_IOS_AGENT_DEFAULT_ADDRESS[0])
+        try:
+            port = int(os.getenv("GO_IOS_AGENT_PORT", ""))
+        except ValueError:
+            port = GO_IOS_AGENT_DEFAULT_ADDRESS[1]
+
+        udid = udid.strip()
+        if '@' in udid:
+            udid, userspace_host = udid.split('@', maxsplit=1)
+        else:
+            userspace_host = hostname
+
+        rsds = await async_get_go_ios_devices((hostname, port), userspace_hostname=userspace_host)
+        if len(rsds) == 0:
+            raise NoDeviceConnectedError()
+
+        if udid != '':
+            try:
+                # Connect to the specified device
+                self.service_provider = [rsd for rsd in rsds if rsd.udid == udid][0]
+            except IndexError:
+                raise DeviceNotFoundError(udid)
+        else:
+            if len(rsds) == 1:
+                self.service_provider = rsds[0]
+            else:
+                self.service_provider = prompt_device_list(rsds)
+
+        for rsd in rsds:
+            if rsd == self.service_provider:
+                continue
+            await rsd.close()
+
+        return self.service_provider
+
     def tunneld(self, ctx, param: str, udid: Optional[str] = None) -> Optional[RemoteServiceDiscoveryService]:
         return asyncio.run(self._tunneld(udid), debug=True)
+
+    def go_ios(self, ctx, param: str, udid: Optional[str] = None) -> Optional[RemoteServiceDiscoveryService]:
+        return asyncio.run(self._go_ios(udid), debug=True)
 
 
 class Command(RSDCommand, LockdownCommand):

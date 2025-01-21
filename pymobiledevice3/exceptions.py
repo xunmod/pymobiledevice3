@@ -15,7 +15,7 @@ __all__ = [
     'AccessDeniedError', 'RSDRequiredError', 'SysdiagnoseTimeoutError', 'GetProhibitedError',
     'FeatureNotSupportedError', 'OSNotSupportedError', 'DeprecationError', 'NotEnoughDiskSpaceError',
     'CloudConfigurationAlreadyPresentError', 'QuicProtocolNotSupportedError', 'RemotePairingCompletedError',
-    'DisableMemoryLimitError',
+    'DisableMemoryLimitError', 'GoIOSConnectionError',
 ]
 
 from typing import Optional
@@ -410,4 +410,9 @@ class RemotePairingCompletedError(PyMobileDevice3Exception):
 
 class DisableMemoryLimitError(PyMobileDevice3Exception):
     """ Disabling memory limit fails. """
+    pass
+
+
+class GoIOSConnectionError(PyMobileDevice3Exception):
+    """ Failed to connect to go-ios tunnel agent. """
     pass

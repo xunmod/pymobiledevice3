@@ -15,10 +15,10 @@ from pymobiledevice3.cli.cli_common import TUNNEL_ENV_VAR, isatty
 from pymobiledevice3.exceptions import AccessDeniedError, CloudConfigurationAlreadyPresentError, \
     ConnectionFailedError, ConnectionFailedToUsbmuxdError, DeprecationError, DeveloperModeError, \
     DeveloperModeIsNotEnabledError, DeviceHasPasscodeSetError, DeviceNotFoundError, FeatureNotSupportedError, \
-    InternalError, InvalidServiceError, MessageNotSupportedError, MissingValueError, NoDeviceConnectedError, \
-    NotEnoughDiskSpaceError, NotPairedError, OSNotSupportedError, PairingDialogResponsePendingError, \
-    PasswordRequiredError, QuicProtocolNotSupportedError, RSDRequiredError, SetProhibitedError, \
-    TunneldConnectionError, UserDeniedPairingError
+    GoIOSConnectionError, InternalError, InvalidServiceError, MessageNotSupportedError, MissingValueError, \
+    NoDeviceConnectedError, NotEnoughDiskSpaceError, NotPairedError, OSNotSupportedError, \
+    PairingDialogResponsePendingError, PasswordRequiredError, QuicProtocolNotSupportedError, RSDRequiredError, \
+    SetProhibitedError, TunneldConnectionError, UserDeniedPairingError
 from pymobiledevice3.lockdown import retry_create_using_usbmux
 from pymobiledevice3.osu.os_utils import get_os_utils
 
@@ -243,6 +243,10 @@ def invoke_cli_with_error_handling() -> bool:
         logger.error(
             'Unable to connect to Tunneld. You can start one using:\n'
             'sudo python3 -m pymobiledevice3 remote tunneld')
+    except GoIOSConnectionError:
+        logger.error(
+            'Unable to connect to go-ios agent. You can start one using:\n'
+            'go-ios tunnel start [--userspace]')
     except DeviceNotFoundError as e:
         logger.error(f'Device not found: {e.udid}')
     except NotEnoughDiskSpaceError:
