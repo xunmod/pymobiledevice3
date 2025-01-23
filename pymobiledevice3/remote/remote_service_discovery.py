@@ -114,7 +114,10 @@ class RemoteServiceDiscoveryService(LockdownServiceProvider):
             raise
 
     def start_remote_service(self, name: str) -> RemoteXPCConnection:
-        service = RemoteXPCConnection((self.service.address[0], self.get_service_port(name)))
+        service = RemoteXPCConnection(
+            (self.service.address[0], self.get_service_port(name)),
+            self.userspace_address
+        )
         return service
 
     def start_service(self, name: str) -> Union[RemoteXPCConnection, ServiceConnection]:
